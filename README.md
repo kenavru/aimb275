@@ -202,29 +202,67 @@ exist, no amount of menu-unlocking will produce it, and you go to Route C.
 
 #### 4.5.1 Back up the flash first (non-negotiable)
 
-`SPI1` is a socketed SOP-8 16 MB chip and `SPI_CN1` is a programming header, so a
-CH341A costs ~€8 and gives you a full recovery path.
+**You do not need to open the case to read the chip.** The Q170 PCH is reachable from
+the OS, and `flashrom -p internal` reads all 16 MB — confirmed on this exact board
+(flashrom 1.4.0, W25Q128.V):
+
+```text
+Found chipset "Intel Q170" (marked untested by flashrom)
+SPI Configuration is locked down.
+FREG0: Flash Descriptor    0x00000000-0x00000fff  read-write
+FREG1: BIOS region         0x00a00000-0x00ffffff  read-write   (6 MiB)
+FREG2: Management Engine   0x00003000-0x009fffff  read-write   (~10 MiB)
+FREG3: Gigabit Ethernet    0x00001000-0x00002fff  read-write
+```
 
 ```bash
-sudo flashrom -p ch341a_spi -r stock1.bin
-sudo flashrom -p ch341a_spi -r stock2.bin
-sha256sum stock1.bin stock2.bin     # hashes must match
+sudo flashrom -p internal -r stock1.bin                    # full 16 MB
+sudo flashrom -p internal --ifd -i bios -r bios_stock.bin  # 6 MiB BIOS region
+sudo flashrom -p internal -r stock2.bin && sha256sum stock*.bin
+```
+
+That dump is the single most valuable object in this project: it is your rollback, it
+tells you the region layout, and it is the base for every edit.
+
+| Region | Range | Size | Notes |
+|---|---|---|---|
+| Descriptor | 0x000000–0x000fff | 4 KiB | locked; don't touch |
+| GbE / i219 LM firmware | 0x001000–0x002fff | 8 KiB | MAC + PHY config live here |
+| ME | 0x003000–0x9fffff | ~10 MiB | keep; never flash a foreign ME |
+| **BIOS** | 0xa00000–0xffffff | **6 MiB** | this is what you mod |
+
+Consequences worth internalising:
+
+* The BIOS region is **6 MiB**, so Advantech's update file is almost certainly a 6 MiB
+  BIOS-region image, not a full 16 MB dump. Flash it with `--ifd -i bios` (or
+  `fpt -bios -f`), never with a plain `-w` over the whole chip, or you erase the ME and
+  the GbE region.
+* To build a full-chip image from a 6 MiB BIOS edit: copy the stock dump and splice the
+  region in at offset 0xA00000 (= 10 MiB exactly):
+
+  ```bash
+  cp stock1.bin modded.bin
+  dd if=bios_mod.bin of=modded.bin bs=1M seek=10 conv=notrunc status=progress
+  ```
+
+* **Reading is allowed, writing is a separate question** — see 4.5.3.
+* Keep `stock1.bin` on another machine as well, and confirm UEFITool parses it without
+  errors before you trust it.
+
+##### If you do need a hardware programmer
+
+`SPI1` is a socketed SOP-8 16 MB chip and `SPI_CN1` is a programming header, so a CH341A
+costs ~€8 and always gets you out of a bad flash:
+
+```bash
+sudo flashrom -p ch341a_spi -r stock_chip.bin
 ```
 
 * Program the chip **out of the socket**, not with a clip on a powered board.
 * Many black CH341A clones drive the data lines at 5 V; the flash is 3.3 V. Use a
   3.3 V-modified/"green" programmer. A 5 V programmer will eventually kill the chip.
-* Keep `stock1.bin` on another machine, and buy a spare **W25Q128** (3.3 V, SOP-8) so
-  you always have a known-good chip to drop in.
-* Confirm the dump is exactly 16 MiB and that UEFITool parses it without errors before
-  you trust it.
-
-Also download the official Advantech BIOS for AIMB-275 from their support site. If you
-are going to flash a modified image, **mod the official image, not your dump** — you
-avoid inheriting whatever state the previous owner left behind. But check its size: if
-it is a capsule or a BIOS-region-only file rather than a full 16 MB image, flash only
-the BIOS region (`flashrom -l layout.txt --image=bios -w ...` or `fpt -bios -f`), or
-strip the capsule with UEFITool first.
+* A spare **W25Q128** (3.3 V, SOP-8) is €3 and turns "bricked" into "swap chip, boot,
+  reflash".
 
 #### 4.5.2 Route A — flip the hidden variable (no flash, ~10 minutes)
 
@@ -269,14 +307,35 @@ by the platform and this route is closed — go to Route C (or B).
    (multi-device enumeration needs it), turn ASPM off, and leave `Max Link Speed` on
    `Auto`/Gen3.
 4. Save as a new image and check it in UEFITool: no "invalid" volumes, no parse errors.
-5. **Flash.** Either externally with the CH341A (`flashrom -p ch341a_spi -w modded.bin`,
-   then `-v` to verify and compare SHA-256), or in a UEFI shell with `AFUEFIx64 /GAN`
-   (the `/GAN` switch bypasses the signature check). External flashing is safer here
-   because `SPI1` is socketed.
-6. **Clear CMOS** (`JCMOS1`), boot into setup, set `Bifurcation` to **x8x4x4**,
+5. **Turn off the write lock** so you can flash without opening the case.
+   `Chipset → PCH-IO Configuration → BIOS Security Configuration → BIOS Lock`
+   is **Enabled** by default, and that is what produces:
+
+   ```text
+   Warning: BIOS region SMM protection is enabled!
+   Warning: Setting BIOS Control at 0xdc from 0xaa to 0x89 failed.
+   SPI Configuration is locked down.
+   ```
+
+   Set it to **Disabled**, save, and reboot (the latch is only clearable at reset).
+6. **Flash.** In order of preference:
+
+   ```bash
+   # a) from the OS, BIOS region only — the normal path on this board
+   sudo flashrom -p internal --ifd -i bios -w bios_mod.bin
+   # b) or a full 16 MB image built with dd (see 4.5.1)
+   sudo flashrom -p internal -w modded.bin
+   # c) fallback: CH341A on SPI1/SPI_CN1, or AFUEFIx64 /GAN in a UEFI shell
+   ```
+
+   Add `-v` on a second run to verify, and keep the SHA-256 of both images. If
+   `BIOS region SMM protection is enabled` still appears after disabling BIOS Lock, the
+   SMM_BWP bit is set independently and internal writes stay blocked — use the
+   programmer.
+7. **Clear CMOS** (`JCMOS1`), boot into setup, set `Bifurcation` to **x8x4x4**,
    `Above 4GB` = Enabled, save and exit.
-7. If it does not POST: power off, swap in the stock chip, done. This is exactly why
-   you bought the spare.
+8. If it does not POST: power off, swap in the stock chip, done. This is exactly why
+   the spare is worth €3.
 
 If AMIBCP refuses the image (common with later Aptio V builds), use **UEFI-Editor**
 (BoringBoredom) instead: extract the IFR, load it in the tool, set the item's access
@@ -345,8 +404,9 @@ and worse idle power — a legitimate plan B for a lab box.
 
 ### 4.6 BIOS modding / recovery (this board is unusually friendly)
 * **SPI1 is a socketed 16 MB SPI flash** and there is a dedicated **SPI_CN1 header**
-  (pinout above). That means: CH341A/clip or header cable, `flashrom -p ch341a_spi`,
-  full 16 MB dump before touching anything — and **instant recovery** if a mod bricks.
+  (pinout above), plus `flashrom -p internal` works from the running OS. So: full 16 MB
+  dump before touching anything, external CH341A for writes/recovery — and **instant
+  recovery** if a mod bricks. Details in §4.5.1.
 * Buy spare W25Q128 (3.3 V, SOP-8) chips: swap between stock and modded BIOS, or wire
   a dual-BIOS switch. This is the single best safety mod for Coffee Lake experiments.
 * Hidden BIOS menus can be unlocked with AMIBCP (bifurcation, Above 4G, ASPM, etc.).
@@ -406,8 +466,9 @@ and worse idle power — a legitimate plan B for a lab box.
    mini-PCIe/mSATA + SATA only.
 4. **H110 (L) has no RAID** and no vPro; it is the true "stripped" board.
 5. **M.2 is B-key**, so most consumer NVMe drives don't fit.
-6. **BIOS chip is 16 MB** — keep a full dump; a corrupted ME region is not
-   recoverable from the OS.
+6. **The 16 MB flash is readable from the OS** — `flashrom -p internal` works, no
+   disassembly. Only the BIOS region (6 MiB, at 0xA00000) is yours to play with; writing
+   needs `BIOS Lock` disabled in setup. See §4.5.1.
 7. The 12–24 V input is **not hot-pluggable** and has no reverse-polarity
    protection; a miswired Phoenix connector is fatal.
 8. After a Coffee Lake mod, **iGPU and sleep states are the usual casualties**;
@@ -510,7 +571,8 @@ it should be reproducible: `grep -i "peg\|bifurc" docs/manual.txt` for the BIOS 
 Locked in from your answers: **AIMB-275VG-00A5E** (Q170, 1 LAN, no M.2, no LVDS) and the
 target is experimenting with as many NVMe drives as the platform will take. Order of work:
 
-1. **Dump the flash** and buy a spare W25Q128 (§4.5.1). ~€15 all-in, and it is the
+1. **Dump the flash** — `flashrom -p internal -r stock1.bin` from the running system, no
+   case opening (§4.5.1). Buy a spare W25Q128 and a CH341A anyway (~€11 total); it is the
    difference between "experiment" and "bricked".
 2. **Try Route A** (§4.5.2) — costs one evening and zero risk. If the IFR inventory shows
    no bifurcation question (likely), skip straight to step 3.
