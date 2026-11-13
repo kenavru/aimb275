@@ -594,81 +594,36 @@ and worse idle power — a legitimate plan B for a lab box.
 
 #### 4.7.1 CPU power limits (PL1/PL2/PL3/PL4) — already in the BIOS
 
-The stock setup is not a stripped client menu: the IFR carries Intel's entire
-power-management subtree. What is *visible* depends on SpeedStep and a dynamic
-"CPU supported" flag, but the questions and the policy fields exist in the image.
+**→ Full standalone guide: [power-limits.md](power-limits.md)** — menu map, offsets,
+decoded defaults, the unhide trick, RAPL recipes, systemd persistence, board limits.
 
-| Page / item | QuestionId | VarOffset | Default in `stock1.bin` |
+The stock IFR carries Intel's whole power subtree; it is not a stripped client menu.
+What is *visible* depends on SpeedStep (`0x4BE`), the CPU-capability flag `0xC3F` and
+Config TDP (`0xCE4`), but the questions and policy fields exist in the image:
+
+| Item | QuestionId | Offset | Default in `stock1.bin` |
 |---|---|---|---|
-| `Advanced → Power & Performance` | form 0x2726 | — | visible |
-| `CPU - Power Management Control` | form 0x2727 | — | grayed if 0xC3F = 1 |
-| `View/Configure Turbo Options` | form 0x2729 | — | needs SpeedStep on |
-| `Power Limit 1 Override` | 0xDC | 0x4C9 (u8) | **Disabled** |
-| `Power Limit 1` | 0xDD | 0x4C5 (u32, mW) | 0 = program TDP |
-| `Power Limit 1 Time Window` | 0xDE | 0x4CA (u8, s) | 0 = 1 s (desktop) |
-| `Power Limit 2 Override` | 0xDF | 0x4CB (u8) | **Enabled** |
-| `Power Limit 2` | 0xE0 | 0x4CC (u32, mW) | 0 = 1.25 × TDP |
-| `Package Power Limit MSR Lock` | 0xDB | 0x4DE (u8) | **Disabled** (unlocked) |
-| `Power Limit 3 Override` | 0x136 | 0x4D0 (u8) | Disabled |
-| `Power Limit 3` | 0x137 | 0x4D1 (u32, mW) | 0 = default |
-| `Power Limit 4 Override` | 0x91 | 0x4D8 (u8) | Disabled |
-| `Power Limit 4` | 0x92 | 0x4D9 (u32, mW) | 0 = default |
-| `Config TDP Configurations` | form 0x2731 | 0x50C… | suppressed unless 0xCE4 |
-| `OverClocking Feature` | 0x2AA | 0x660 (u8) | Disabled |
-| `Setup Item Hidden` | 0x9 | 0x1013 (u8) | 0 = hidden pages stay hidden |
+| `Power Limit 1 Override` / value / window | 0xDC / 0xDD / 0xDE | 0x4C9 / 0x4C5 (u32 mW) / 0x4CA | Disabled / 0 = TDP / 0 = 1 s |
+| `Power Limit 2 Override` / value | 0xDF / 0xE0 | 0x4CB / 0x4CC (u32 mW) | **Enabled** / 0 = 1.25 × TDP |
+| `Package Power Limit MSR Lock` | 0xDB | 0x4DE | **Disabled** (RAPL writable) |
+| `Power Limit 3 Override` / value | 0x136 / 0x137 | 0x4D0 / 0x4D1 (u32 mW) | Disabled / 0 |
+| `Power Limit 4 Override` / value | 0x91 / 0x92 | 0x4D8 / 0x4D9 (u32 mW) | Disabled / 0 |
 
-So the out-of-box state is: **PL1 = CPU TDP, PL2 = 1.25 × TDP, MSR unlocked**. For a
-65 W i5-8500/i7-8700 that is 65 W long-term and ~81 W short-term — exactly the board's
-thermal design point (datasheet lists 35 W and 65 W CPU/cooler combinations).
-
-If those pages are missing from your menu, clear AMI's global hidden flag from a UEFI
-shell or GRUB with `grub-mod-setup_var`:
-
-```text
-setup_var 0x1013 0x1      # "Setup Item Hidden" = Disabled -> suppressed pages appear
-```
-
-Do **not** "Load Setup Defaults" afterwards (that writes 0x1013 back to 0). This also
-exposes `OverClocking Performance Menu` (enable `OverClocking Feature` for
-Processor/Memory/Uncore), Intel ICC and Thunderbolt pages. It does not *add* power
-limits — it reveals the ones already compiled in.
-
-If `CPU - Power Management Control` is present but grayed out, the gate is the dynamic
-question `0xC3F` (a CPU-capability flag), not `0x1013`; that needs an access-level patch
-or, much more simply, the runtime RAPL path below.
-
-The four PL values are 32-bit fields, so `setup_var` (byte writes) is not enough; use
-RU.EFI or change them at runtime. Runtime is easier, and the MSR lock is off:
+Defaults decoded from the Setup default blob (`NVRAM external defaults → Setup`), so a
+65 W CPU runs **65 W sustained / ~81 W burst** out of the box. The MSR lock is off, so
+the limits are writable from the OS without flashing:
 
 ```bash
-sudo modprobe msr
-sudo rdmsr -a 0x610                 # PKG_POWER_LIMIT; bit 63 = 0 -> writable
-find /sys/class/powercap -name 'constraint_*_power_limit_uw'
-cat /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw   # PL1, µW
-cat /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_1_power_limit_uw   # PL2, µW
-
-# quiet/fanless profile: 45 W sustained, 65 W burst, 28 s window
+sudo modprobe msr && sudo rdmsr -a 0x610        # bit 63 = 0 -> writable
 echo 45000000 | sudo tee /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw
 echo 65000000 | sudo tee /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_1_power_limit_uw
-echo 28000000 | sudo tee /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_time_window_us
 ```
 
-Those values do not survive a reboot; put them in a systemd unit (or a udev rule) if
-you want them permanent.
-
-Limits that matter more than the menu:
-
-* **The board is a 65 W design.** Advantech's cooler options are 45 W (80 mm) and
-  65 W (92.9 mm), and the datasheet's CPU TDP column tops out at 65 W. The 12–24 V
-  input and 4-pin ATX12V can deliver more, but the VRM and the cooler cannot; PL1
-  above 65 W is outside the board spec.
-* **Non-K SKUs**: Intel's own help text says PL1 must stay between Min Power Limit
-  and TDP, and the BIOS clamps it. The MSR is unlocked, so a runtime tool can set more,
-  but the CPU fuse table may refuse and the VRM will be the real limit. **PL2 is the
-  useful knob** on a locked chip.
-* **4× NVMe lab**: dropping PL1 to 35–45 W is the sane move — 3–4 NVMe add 15–25 W,
-  and you stay inside a 120–180 W brick and the 65 W cooler. Lowering is always safe;
-  raising is the experiment.
+If the pages are missing, `setup_var 0x1013 0x1` clears AMI's global "Setup Item
+Hidden" flag (don't Load Setup Defaults afterwards). The 32-bit watt fields need
+RU.EFI or the runtime path above. The board is a **65 W design** (35/65 W CPU options,
+45/65 W coolers, 12–24 V input); PL1 above 65 W is outside spec, non-K SKUs clamp PL1
+to TDP, and 35–45 W is the sane profile for a 4×NVMe lab.
 
 #### 4.7.2 Power delivery and battery
 
@@ -771,6 +726,7 @@ Limits that matter more than the menu:
 ```
 README.md                           this dossier
 gallery.html                        click-through gallery (open it in a browser)
+power-limits.md                     PL1/PL2/PL3/PL4, unhide trick, RAPL guide
 
 img/aimb275-g2-top-3q.png           G2/A2 board, 3/4 top view (hi-res)
 img/aimb275-g2-front-3q.png         G2/A2 board, front 3/4 view
