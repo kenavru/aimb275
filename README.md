@@ -168,22 +168,27 @@ riser, reporting "partial success". Q170 is in the chipset group that *can* do i
 exist on this platform. Treat as a lab experiment: needs a BIOS backup, a spare flash
 chip, and a riser that supports the mode.
 
+**Confirmed directly:** the stock 16 MB image was decompressed and searched and contains
+**no `Bifurcation` question at all** — so there is nothing to unhide and the BIOS routes
+are dead on this image. The working path is the CPU CFG strap (§4.5.5). Evidence and
+method in §4.5.0.
+
 **→ Full procedure, including the two no-flash options, is in §4.5 below.**
 
 ### 4.5 How to add the bifurcation option to the BIOS (step by step)
 
 There are three routes, in increasing order of risk:
 
-| Route | What you touch | Reversible? | Chance it works on this board |
-|---|---|---|---|
-| **A. Runtime variable flip** | nothing — a setup value in NVRAM | yes, clear CMOS | low–medium (only if the question exists but is hidden) |
-| **B. Unlock + reflash BIOS** | the 16 MB image | yes (keep stock chip/dump) | low–medium, same precondition as A |
-| **C. CPU CFG strap bridge** | the CFG strap pads on the bottom of the CPU | yes, peel the tape off | high — this is what the AIMB-275 community actually did |
+| Route | What you touch | Reversible? | Chance it works on this board | Status on the stock image (§4.5.0) |
+|---|---|---|---|---|
+| **A. Runtime variable flip** | nothing — a setup value in NVRAM | yes, clear CMOS | low–medium (only if the question exists but is hidden) | **dead** — no question to flip |
+| **B. Unlock + reflash BIOS** | the 16 MB image | yes (keep stock chip/dump) | low–medium, same precondition as A | **dead** — nothing to unhide |
+| **C. CPU CFG strap bridge** | the CFG strap pads on the bottom of the CPU | yes, peel the tape off | high — this is what the AIMB-275 community actually did | **only remaining route** |
 
-Work in the order **A → C**, and keep B for when you want the setting to survive a
-CMOS clear. B is the only route that persists, and the only one that can leave you with
-a board that does not POST — so it goes last, with a verified dump and a spare chip on
-the bench.
+Work in the order **A → B → C** on an *unanalysed* image. On the stock AIMB-275 image
+analysed in §4.5.0, A and B are already ruled out, so **start at C**. B is the only route
+that persists, and the only one that can leave you with a board that does not POST — so
+it goes last, with a verified dump and a spare chip on the bench.
 
 #### 4.5.0 Know what the stock BIOS gives you
 
@@ -199,6 +204,71 @@ Bifurcation is an Intel IIO setup question that AMI's reference code includes on
 server/workstation builds and normally *omits* from client builds. So step zero is
 always an inventory: does the question exist in your image at all? If it does not
 exist, no amount of menu-unlocking will produce it, and you go to Route C.
+
+##### Verdict on the real thing: `stock1.bin`
+
+This was not left as an exercise. A 16 MB internal-flashrom dump of this exact board
+(Advantech stock, Coffee Lake-capable) was decompressed and searched, ASCII **and**
+UTF-16LE:
+
+* Image: 16,777,216 bytes, SHA-256
+  `aa2b4e33a046ee892c3b81ce3a8084d8b47bc4115f1737888959061385e4696a`, valid flash
+  descriptor, 6 MiB BIOS region at `0xA00000`.
+* All six LZMA streams in the BIOS region were decompressed (8.9 MB of Setup/AMITSE
+  payload), so the search covers the modules that are compressed inside the FFS volumes.
+
+| String | Raw image (ASCII/UTF-16) | Decompressed Setup | Interpretation |
+|---|---|---|---|
+| `Bifurcation` | 0 / 0 | **0** | the question does not exist |
+| `PEG Port` | 0 / 0 | 5 | PEG pages are present |
+| `Enable Root Port` | 0 / 0 | 3 | stock PEG page confirmed |
+| `Max Link Speed` | 0 / 0 | 4 | stock PEG page confirmed |
+| `Above 4GB` | 0 / 0 | 2 | stock SA page confirmed |
+| `BIOS Lock` | 0 / 0 | 2 | the write gate from 4.5.3 exists |
+| `Root Port` | 0 / 0 | 85 | IIO/PEG strings are all there |
+
+The positive controls behave exactly as expected, so this is not a failing search:
+**`Bifurcation` has zero hits in the entire image.** Strings that *are* in the form
+include `PEG Port Feature Configuration`, `Detect Non-Compliance Device`,
+`PCI Express Length`, `Enable Root Port`, `Max Link Speed`, `Above 4GB MMIO BIOS
+assigment` and `BIOS Lock` — the client-style PEG page, with no split control bolted on.
+
+Consequences:
+
+* **Route A is closed.** There is no varstore byte to write; `setup_var`/RU would be
+  writing to an offset that does not describe a bifurcation setting.
+* **Route B is closed.** AMIBCP/UEFI-Editor set *access levels* on existing questions.
+  They cannot create one the build never compiled in. Reflashing a "menu-unlocked"
+  image would only produce the same four PEG items, now ungrayed.
+* **Route C is the path** — §4.5.5.
+
+The same dump also shows this is a genuine Coffee Lake build (microcodes in the BIOS
+region, absolute offsets in the 16 MB image):
+
+| Offset | Signature | CPU | Revision | Date (from header) |
+|---|---|---|---|---|
+| `0x0DD0280` | `0x906EB` | Coffee Lake-S, 4-core | `0xDE` | 2020-05-25 |
+| `0x0DE9A80` | `0x906EA` | Coffee Lake-S, 6-core | `0xDE` | 2020-05-25 |
+| `0x0E02E80` | `0x506E3` | Skylake-S | `0xDC` | 2020-04-27 |
+| `0x0E1C680` | `0x506E8` | Skylake-H | `0x034` | 2016-07-10 |
+
+So the 8th/9th-gen CPU support in this image is real, not a relabelled Skylake build —
+which is good news for Route C, since the strap technique is exactly the same on Coffee
+Lake. Note the ME region is 11.x and compressed; its version string is not plaintext, so
+bumping microcode or ME would mean reflashing the whole region, not a BIOS-region edit.
+
+Reproduce the analysis (no proprietary tools needed):
+
+```bash
+sha256sum stock1.bin
+python3 - <<'PY'
+d = open('stock1.bin','rb').read()
+for kw in ('Bifurcation','PEG Port','Enable Root Port','BIOS Lock'):
+    print(f"{kw:18s} ascii={d.count(kw.encode()):4d} utf16={d.count(kw.encode('utf-16-le')):4d}")
+PY
+```
+
+The zero on `Bifurcation` is the whole answer: this board needs the hardware strap.
 
 #### 4.5.1 Back up the flash first (non-negotiable)
 
@@ -266,6 +336,10 @@ sudo flashrom -p ch341a_spi -r stock_chip.bin
 
 #### 4.5.2 Route A — flip the hidden variable (no flash, ~10 minutes)
 
+> **Ruled out on the stock AIMB-275 image** (§4.5.0: zero `Bifurcation` strings). Kept
+> here because it is the correct first move on any board you have not analysed, and it
+> is the cheapest route when the question does exist.
+
 This only works if the question is present in the image but *suppressed* (invisible)
 in the form. You change the value directly, bypassing the hidden form.
 
@@ -296,6 +370,11 @@ If the value silently reverts after a cold boot, the varstore is checksummed/val
 by the platform and this route is closed — go to Route C (or B).
 
 #### 4.5.3 Route B — unlock the menu and reflash (persistent)
+
+> **Ruled out on the stock AIMB-275 image** (§4.5.0). A menu unlock changes the *access
+> level* of an existing question; it cannot add one that is not in the IFR. Reflashing
+> would only un-gray the same four PEG items. Skip to §4.5.5 unless you are working from
+> a different vendor image.
 
 1. Open the image in **AMIBCP 5.x** (must be an Aptio V build; 5.02.0031+ handles most
    AIMB-275-era images). Navigate `Setup Configuration → System Agent (SA)
@@ -357,6 +436,9 @@ show all drives, each at Gen3 x4 (~3.5 GB/s in a quick `fio`/`dd` test).
 
 #### 4.5.5 Route C — no BIOS mod at all: bridge the CFG pads on the CPU
 
+**Start here.** On the stock image this is the only route that can work (§4.5.0), it
+needs no flash write, no BIOS editor and no unlock, and it is undone by peeling tape off.
+
 This is the WatchMySys technique (linked in §6) and the one AIMB-275 owners report
 using: Intel exposes **CFG strap pins** on the LGA1151 package that tell the CPU how to
 split its 16 PEG lanes at reset. Workstation boards pull them to ground to offer
@@ -397,6 +479,20 @@ VG has no M.2 slot, so the realistic four-drive layout is:
   which is fine for a boot/OS drive.
 * Power: 4 NVMe ≈ 15–25 W peak; a 120–180 W 12 V brick is plenty, but check the riser's
   3.3 V delivery — cheap risers feed 3.3 V from the slot and can brown out under load.
+
+Lab shopping list — what to look for, not a specific BOM:
+
+| Item | Spec that matters | ~Price | Why |
+|---|---|---|---|
+| x8/x4/x4 passive riser | 4-slot 16-lane, **no** redriver/switch, 12 V + 3.3 V from the slot plus a Molex/SATA power input | €20–30 | the split comes from the CPU strap; the riser only has to *carry* it |
+| 2× M.2 M-key NVMe adapter | x4 physical, single drive, no PCIe switch, M key (not B+M) | €8–15 each | goes in the two x4 slots |
+| 1× x4→x8 adapter | single M.2 slot, x4 wired | €10–15 | fills the x8 slot; trains x4, that is expected |
+| mini-PCIe → M.2 NVMe adapter | mPCIe half/full-size, removable standoffs | €12–20 | the 4th drive / boot device, Gen3 x1 (~1 GB/s) |
+| CH341A + spare W25Q128 | 3.3 V-modded ("green") programmer, SOP-8 socket | €11 | recovery insurance; the chip is socketed |
+| 12 V PSU | 120–180 W brick or ATX, 5.5/2.5 mm barrel or ATX 24-pin per your harness | €25–40 | 4 NVMe plus a 65 W CPU |
+
+Skip: **x16→4×M.2 switch cards with a redriver** (they need bifurcation anyway), and any
+"x4x4x4x4" riser — the CPU cannot produce that pattern on LGA1151.
 
 If you would rather not touch the BIOS at all, a **PEX-switch-based** card (PLX/PEX8724)
 splits x16 into 4×x4 with no CPU/BIOS support, at the cost of ~€80–150, extra latency,
@@ -545,6 +641,15 @@ pdftotext -layout docs/aimb275-datasheet-A1-2016.pdf docs/a1.txt
 Board photos and layout figures in `img/` are cropped from those documents and are
 included for identification and commentary; all trademarks remain Advantech's.
 
+### Firmware dumps (deliberately not committed)
+
+`*.bin` / `*.rom` are in `.gitignore`. A full dump contains the **Intel ME region** and
+the **GbE region with your MAC address**, so it is neither safe nor useful to publish:
+the ME is machine-specific and flashing someone else's into your board is a good way to
+lose the board. Keep `stock1.bin` on two machines, plus a copy on the spare chip. The
+analysis in §4.5.0 is reproducible from any dump of the same BIOS version, and the
+SHA-256 above lets you confirm you are working from the same image.
+
 ### Re-checking the claims in this README
 
 Everything here is either quoted from those documents or linked to a public source, so
@@ -572,15 +677,15 @@ Locked in from your answers: **AIMB-275VG-00A5E** (Q170, 1 LAN, no M.2, no LVDS)
 target is experimenting with as many NVMe drives as the platform will take. Order of work:
 
 1. **Dump the flash** — `flashrom -p internal -r stock1.bin` from the running system, no
-   case opening (§4.5.1). Buy a spare W25Q128 and a CH341A anyway (~€11 total); it is the
-   difference between "experiment" and "bricked".
-2. **Try Route A** (§4.5.2) — costs one evening and zero risk. If the IFR inventory shows
-   no bifurcation question (likely), skip straight to step 3.
+   case opening (§4.5.1). **Done** — the dump was analysed in §4.5.0: it is a valid
+   16 MB Coffee Lake-capable image with no bifurcation question. Buy a spare W25Q128 and
+   a CH341A anyway (~€11 total); it is the difference between "experiment" and "bricked".
+2. ~~Try Route A~~ (§4.5.2) — already ruled out on this image, and B with it (§4.5.0).
 3. **CFG-pad bridge on the CPU** (§4.5.5) — no BIOS edit, reversible, matches what other
-   AIMB-275 owners report.
+   AIMB-275 owners report. This is your actual first hardware step.
 4. **Riser + 3 NVMe + mini-PCIe boot drive**, then verify with `lspci -tv` (§4.5.4, §4.5.7).
-5. Only if 2–3 fail: **unlock and reflash the BIOS** (§4.5.3), with the stock chip on the
-   bench next to you.
+5. Only if the strap fails: **PEX-switch card** (§4.5.7), or unlock and reflash a
+   different vendor image (§4.5.3) with the stock chip on the bench next to you.
 
 The BIOS will never give you x4x4x4x4 (CPU limit, not a menu limit), so 4 NVMe is the
 practical ceiling: 3 behind the x16 slot, 1 on mini-PCIe.

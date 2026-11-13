@@ -1,3 +1,9 @@
 # vendor documents are not redistributed (Advantech copyright)
 docs/*.pdf
 docs/*.txt
+
+# firmware dumps stay local: they contain the Intel ME region and the GbE MAC
+*.bin
+*.rom
+*.BIN
+*.ROM
