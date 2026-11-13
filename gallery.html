@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIMB-275 — image gallery</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a313c; --fg:#e6edf3;
+    --dim:#8b949e; --accent:#4c9aff;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header{
+    padding:28px 24px 18px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#12171e,#0e1116);
+  }
+  header h1{margin:0 0 6px; font-size:22px; letter-spacing:.2px}
+  header p{margin:0; color:var(--dim); font-size:13px}
+  header a{color:var(--accent); text-decoration:none}
+  main{max-width:1200px; margin:0 auto; padding:24px}
+  .group{margin:34px 0 0}
+  .group:first-child{margin-top:0}
+  .group h2{
+    font-size:13px; text-transform:uppercase; letter-spacing:.12em;
+    color:var(--dim); margin:0 0 14px; font-weight:600;
+    padding-bottom:8px; border-bottom:1px solid var(--line);
+  }
+  .grid{display:grid; gap:16px; grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  figure{
+    margin:0; background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; overflow:hidden; cursor:zoom-in;
+    transition:border-color .15s, transform .15s;
+  }
+  figure:hover{border-color:#3d4a5c; transform:translateY(-2px)}
+  figure img{display:block; width:100%; height:210px; object-fit:contain; background:#0a0d11; padding:8px}
+  figure.tall img{height:360px; background:#fff}
+  figcaption{padding:10px 12px; border-top:1px solid var(--line)}
+  figcaption strong{display:block; font-size:13.5px; font-weight:600}
+  figcaption span{display:block; color:var(--dim); font-size:12px; margin-top:3px}
+  footer{padding:26px 24px 60px; color:var(--dim); font-size:12px; text-align:center}
+
+  /* lightbox */
+  #lb{
+    position:fixed; inset:0; background:#000d; backdrop-filter:blur(3px);
+    display:none; align-items:center; justify-content:center; z-index:50; padding:20px;
+  }
+  #lb.on{display:flex}
+  #lb img{max-width:94vw; max-height:82vh; object-fit:contain; border-radius:6px; background:#111}
+  #lbCap{
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    max-width:90vw; text-align:center; color:#cfd8e3; font-size:13px;
+  }
+  .nav{
+    position:absolute; top:50%; transform:translateY(-50%);
+    background:#1c2430cc; color:#fff; border:1px solid #3d4a5c; border-radius:50%;
+    width:44px; height:44px; font-size:20px; line-height:1; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; user-select:none;
+  }
+  .nav:hover{background:#2a3546}
+  #prev{left:16px} #next{right:16px}
+  #close{top:16px; right:16px; transform:none; width:38px; height:38px; font-size:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Advantech AIMB-275 — image gallery</h1>
+  <p>12 board, rear-I/O, layout and datasheet images. Click any image to enlarge; use ← / → or the arrows to browse. Back to <a href="README.md">README</a>.</p>
+</header>
+
+<main>
+  <section class="group">
+    <h2>Board photos</h2>
+    <div class="grid">
+      <figure>
+        <img src="img/aimb275-g2-top-3q.png" alt="AIMB-275G2 Rev A2 board, three-quarter top view">
+        <figcaption><strong>AIMB-275G2 / A2 — top 3/4</strong><span>Full SKU: Q170, 2× GbE, M.2 B-key, LVDS/eDP, 6× USB 3.0</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-g2-front-3q.png" alt="AIMB-275G2 board, front three-quarter view">
+        <figcaption><strong>AIMB-275G2 / A2 — angled view</strong><span>Rear-I/O side: DC-in, DP, HDMI, 2× LAN, 4× USB 3.0, audio</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-datasheet-photo.png" alt="AIMB-275 official product photo, angled rear view">
+        <figcaption><strong>Official product photo</strong><span>Datasheet shot: PCIe x16, SO-DIMM slots, DC-in Phoenix block, rear I/O</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-a1-vga-top-3q.png" alt="AIMB-275 Rev A1 board with VGA and COM">
+        <figcaption><strong>AIMB-275 Rev A1 — top 3/4</strong><span>Early 2016 version: adds VGA and a stacked COM port; otherwise identical</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Rear I/O comparison (A1 vs A2)</h2>
+    <div class="grid">
+      <figure>
+        <img src="img/aimb275-a2-rear-io.png" alt="AIMB-275 Rev A2 rear I/O panel">
+        <figcaption><strong>Rev A2 rear I/O</strong><span>DC-in Phoenix, DP++, HDMI, 2× GbE, 4× USB 3.0, 3 audio jacks</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-a1-rear-io.png" alt="AIMB-275 Rev A1 rear I/O panel with VGA">
+        <figcaption><strong>Rev A1 rear I/O</strong><span>Same but with VGA and an extra COM — the easy visual tell for A1 vs A2</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Layouts &amp; block diagram</h2>
+    <div class="grid">
+      <figure>
+        <img src="img/aimb275-board-layout-clean.png" alt="Clean labelled top-side board layout">
+        <figcaption><strong>Clean labelled layout</strong><span>All connectors and jumpers with callouts</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-top-layout-and-jumpers.png" alt="Manual page showing top-side layout and jumper table">
+        <figcaption><strong>Top layout + jumper table</strong><span>From the Rev A2 manual — jumper list and connector map</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-bottom-layout.png" alt="Bottom-side layout with M.2 mounting positions">
+        <figcaption><strong>Bottom side</strong><span>M.2_1/2/3 mounting holes, CPU backplate, board stiffening</span></figcaption>
+      </figure>
+      <figure>
+        <img src="img/aimb275-block-diagram.png" alt="AIMB-275 system block diagram">
+        <figcaption><strong>Block diagram</strong><span>PCIe/DMI lanes, display paths, PCH-attached LAN, USB, SATA, LPC/SPI</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Datasheet pages</h2>
+    <div class="grid">
+      <figure class="tall">
+        <img src="img/aimb275-datasheet-p1.png" alt="AIMB-275 datasheet page 1">
+        <figcaption><strong>Datasheet p.1</strong><span>Full specifications table incl. CPU support list, TDP, power figures</span></figcaption>
+      </figure>
+      <figure class="tall">
+        <img src="img/aimb275-datasheet-p2.png" alt="AIMB-275 datasheet page 2">
+        <figcaption><strong>Datasheet p.2</strong><span>Block diagram, ordering information (SKUs), packing list, accessories, risers</span></figcaption>
+      </figure>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Sources: Advantech AIMB-275 datasheet (Mar 2023) and AIMB-275 A2 User Manual (Rev 1.0, Dec 2019);
+  TheRetroWeb board photos. Local copies in <code>docs/</code>.
+</footer>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Image viewer">
+  <button class="nav" id="close" aria-label="Close">✕</button>
+  <button class="nav" id="prev" aria-label="Previous">‹</button>
+  <img id="lbImg" alt="">
+  <button class="nav" id="next" aria-label="Next">›</button>
+  <div id="lbCap"></div>
+</div>
+
+<script>
+(function(){
+  var figs = Array.prototype.slice.call(document.querySelectorAll("figure"));
+  var lb = document.getElementById("lb");
+  var img = document.getElementById("lbImg");
+  var cap = document.getElementById("lbCap");
+  var i = 0;
+
+  function show(n){
+    i = (n + figs.length) % figs.length;
+    var f = figs[i];
+    var src = f.querySelector("img");
+    img.src = src.src;
+    img.alt = src.alt;
+    var t = f.querySelector("strong").textContent;
+    var s = f.querySelector("span").textContent;
+    cap.textContent = (i+1) + " / " + figs.length + " — " + t + " · " + s;
+  }
+  function open(n){ show(n); lb.classList.add("on"); }
+  function close(){ lb.classList.remove("on"); img.src=""; }
+
+  figs.forEach(function(f, n){
+    f.addEventListener("click", function(){ open(n); });
+  });
+  document.getElementById("prev").addEventListener("click", function(e){ e.stopPropagation(); show(i-1); });
+  document.getElementById("next").addEventListener("click", function(e){ e.stopPropagation(); show(i+1); });
+  document.getElementById("close").addEventListener("click", close);
+  lb.addEventListener("click", function(e){ if(e.target === lb) close(); });
+  document.addEventListener("keydown", function(e){
+    if(!lb.classList.contains("on")) return;
+    if(e.key === "Escape") close();
+    else if(e.key === "ArrowLeft") show(i-1);
+    else if(e.key === "ArrowRight") show(i+1);
+  });
+})();
+</script>
+</body>
+</html>
