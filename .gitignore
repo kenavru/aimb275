@@ -7,3 +7,6 @@ docs/*.txt
 *.rom
 *.BIN
 *.ROM
+
+# UEFIExtract output
+*.dump/

@@ -455,6 +455,82 @@ the CPU to an adjacent ground pad** with copper tape or folded aluminium foil.
   tree still shows one link, you are in the B/H failure mode, or the riser is wired for
   a different split.
 
+##### Exact pads: LGA1151, CFG[6] and CFG[5] → ground
+
+The strap is two bits, and Intel publishes the land numbers. For x8/x4/x4 you need
+**CFG[6] = 0 and CFG[5] = 0**; CFG[2] stays high (normal lane numbering).
+
+| Signal | Land (Intel land list) | Bridge to | Notes |
+|---|---|---|---|
+| CFG[6] | **G21** | **H21** or **G22** (both VSS) | `H21` is directly above, `G22` to the left |
+| CFG[5] | **H18** | **J18** (VSS) | `G17`/`G19` are also VSS and safe |
+| CFG[2] | F16 | leave alone | high = normal lane order |
+| **Do not touch** | G20 = CFG[12], F21 = CFG[14], H19 = CFG[15] | — | adjacent but **not** ground |
+
+* Source: Intel *6th Generation Core Processor Family Datasheet, Vol. 1* (§9 land
+  list: `G21 CFG[6]`, `H18 CFG[5]`) and §6.4 for the encoding. The same `CFG[6:5]`
+  table is repeated verbatim in the 8th/9th-gen datasheet, so Coffee Lake uses the
+  same lands on this socket — eyeball the pads before taping.
+* Cover each CFG pad **and** the chosen VSS pad, and nothing else. One layer of copper
+  tape or a folded piece of aluminium foil held with Kapton is enough; check with a
+  multimeter that CFG[6] and CFG[5] read ~0 Ω to ground and that neighbouring pads
+  did not bridge.
+* The pad-to-pad pitch is 0.9144 mm, so steady hands and a magnifier. Do it with the
+  CPU out of the socket, on a soft surface, and don't bend the package.
+
+Result: `CFG[6:5] = 00` → `0:1:0` x8, `0:1:1` x4, `0:1:2` x4, exactly the wiring of an
+x8/x4/x4 riser.
+
+##### Why this cannot be done in the BIOS instead
+
+This is the part the internet gets wrong, so here is the full chain of evidence.
+
+1. **The chipset is not the blocker.** Intel's *100 Series PCH Datasheet, Vol. 1*,
+   Table 1-2 lists Q170 as `Processor dgfx bifurcation support = Yes`, with note 5:
+   "PCIe configuration 1x16, or 2x8 or 2x4 or 1x8 are supported". H170/Q150/B150 are
+   `No`; Q170 is in the same group as Z170/C236.
+2. **The selector is a pin, not a register.** The CPU samples `CFG[6:5]` on the rising
+   edge of `RESET#` and hard-partitions the PEG PHY before any firmware executes.
+   Intel's datasheet gives the encoding (`00` = 1×8 + 2×4, `10` = 2×8, `11` = 1×16)
+   and lists the pins as **inputs** with a default of `1` when unterminated.
+3. **Boards that expose a menu option still need the hardware strap.** Kontron's
+   mITX-KBL-H-CM238 manual lists "Support PEG Bifurcation ... through HW strapping
+   option" and then, under the PEG slot: "For PEG Bifurcation to function a PCIe Riser
+   Card with bifurcation and **hardware modification is required**." The BIOS item
+   selects the matching policy; it does not create the split.
+4. **The PCH does have a CPU-strap override — but not this one.** The 100-series PCH
+   exposes `Set Strap Msg Lock/Control/Data` (D31:F5, offsets `F0/F4/F8`), which can
+   inject 16 bits of "CPU strap" data into the `Set_Strap` type-1 message on the next
+   reset. Intel's own FIT tool decodes the CPU-strap section as power/VR fields
+   (`HyperThreadingDisable`, `NumActiveCores`, `SaVrType`, `SvidPresence`, ...); there
+   is no PEG or bifurcation field in it. The stock BIOS also locks the interface during
+   `PchInit` before the OS runs. No PEG bit to flip.
+5. **The firmware agrees.** The Setup IFR of this exact dump has no `Bifurcation`
+   question, but it *does* already contain per-root-port pages for `PEG 0:1:0`,
+   `0:1:1` and `0:1:2`, each with `Enable Root Port = Auto`. Once the strap presents
+   the extra functions, the stock BIOS enables and enumerates them without any edit.
+   There is literally nothing to add.
+
+The one BIOS-side setting worth changing is `Above 4GB MMIO BIOS assignment`
+(default **Disabled**), which matters for large BARs on the devices behind the riser.
+It is an existing question, so you can set it without flashing:
+
+| Setting | QuestionId | VarOffset | Default | Set to |
+|---|---|---|---|---|
+| `Above 4GB MMIO BIOS assignment` | 0x405 | **0x79E** | Disabled | Enabled |
+| `PEG 0:1:0 Enable Root Port` | 0x43F | 0x70F | Auto | Auto |
+| `PEG 0:1:1 Enable Root Port` | 0x451 | 0x710 | Auto | Auto |
+| `PEG 0:1:2 Enable Root Port` | 0x463 | 0x711 | Auto | Auto |
+| `Max Link Width` (hidden, `0xCB1`) | 0x441 | 0x715 | Auto | Auto |
+
+```bash
+# from a UEFI shell / GRUB with grub-mod-setup_var, no flash needed
+setup_var 0x79E 0x1
+```
+
+Since the IFR only *displays* access rules, an AMIBCP "unlock" would at most un-gray
+`Max Link Width` (x1/x2/x4/x8 on one link) — it cannot create `0:1:1`/`0:1:2`.
+
 #### 4.5.6 Triage: it still does not work
 
 | Symptom | Most likely cause |
