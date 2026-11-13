@@ -581,13 +581,97 @@ and worse idle power — a legitimate plan B for a lab box.
   recovery** if a mod bricks. Details in §4.5.1.
 * Buy spare W25Q128 (3.3 V, SOP-8) chips: swap between stock and modded BIOS, or wire
   a dual-BIOS switch. This is the single best safety mod for Coffee Lake experiments.
-* Hidden BIOS menus can be unlocked with AMIBCP (bifurcation, Above 4G, ASPM, etc.).
+* Hidden BIOS menus can be exposed with AMIBCP/UEFI-Editor (Above 4G, ASPM,
+  PL1/PL2, C-states) — but only questions that already exist. There is no
+  bifurcation question to unhide (§4.5.5); power limits, by contrast, are already
+  in the IFR (§4.7.1).
 * ME can be disabled in BIOS (Aerotech ships it disabled for real-time motion
   control) — useful for latency tuning, but disabling ME breaks vPro/AMT.
 * BIOS updates are distributed by Advantech (support → AIMB-275 → BIOS). Flash with
   AFUEFI from DOS/Windows, or externally via SPI.
 
 ### 4.7 Power mods
+
+#### 4.7.1 CPU power limits (PL1/PL2/PL3/PL4) — already in the BIOS
+
+The stock setup is not a stripped client menu: the IFR carries Intel's entire
+power-management subtree. What is *visible* depends on SpeedStep and a dynamic
+"CPU supported" flag, but the questions and the policy fields exist in the image.
+
+| Page / item | QuestionId | VarOffset | Default in `stock1.bin` |
+|---|---|---|---|
+| `Advanced → Power & Performance` | form 0x2726 | — | visible |
+| `CPU - Power Management Control` | form 0x2727 | — | grayed if 0xC3F = 1 |
+| `View/Configure Turbo Options` | form 0x2729 | — | needs SpeedStep on |
+| `Power Limit 1 Override` | 0xDC | 0x4C9 (u8) | **Disabled** |
+| `Power Limit 1` | 0xDD | 0x4C5 (u32, mW) | 0 = program TDP |
+| `Power Limit 1 Time Window` | 0xDE | 0x4CA (u8, s) | 0 = 1 s (desktop) |
+| `Power Limit 2 Override` | 0xDF | 0x4CB (u8) | **Enabled** |
+| `Power Limit 2` | 0xE0 | 0x4CC (u32, mW) | 0 = 1.25 × TDP |
+| `Package Power Limit MSR Lock` | 0xDB | 0x4DE (u8) | **Disabled** (unlocked) |
+| `Power Limit 3 Override` | 0x136 | 0x4D0 (u8) | Disabled |
+| `Power Limit 3` | 0x137 | 0x4D1 (u32, mW) | 0 = default |
+| `Power Limit 4 Override` | 0x91 | 0x4D8 (u8) | Disabled |
+| `Power Limit 4` | 0x92 | 0x4D9 (u32, mW) | 0 = default |
+| `Config TDP Configurations` | form 0x2731 | 0x50C… | suppressed unless 0xCE4 |
+| `OverClocking Feature` | 0x2AA | 0x660 (u8) | Disabled |
+| `Setup Item Hidden` | 0x9 | 0x1013 (u8) | 0 = hidden pages stay hidden |
+
+So the out-of-box state is: **PL1 = CPU TDP, PL2 = 1.25 × TDP, MSR unlocked**. For a
+65 W i5-8500/i7-8700 that is 65 W long-term and ~81 W short-term — exactly the board's
+thermal design point (datasheet lists 35 W and 65 W CPU/cooler combinations).
+
+If those pages are missing from your menu, clear AMI's global hidden flag from a UEFI
+shell or GRUB with `grub-mod-setup_var`:
+
+```text
+setup_var 0x1013 0x1      # "Setup Item Hidden" = Disabled -> suppressed pages appear
+```
+
+Do **not** "Load Setup Defaults" afterwards (that writes 0x1013 back to 0). This also
+exposes `OverClocking Performance Menu` (enable `OverClocking Feature` for
+Processor/Memory/Uncore), Intel ICC and Thunderbolt pages. It does not *add* power
+limits — it reveals the ones already compiled in.
+
+If `CPU - Power Management Control` is present but grayed out, the gate is the dynamic
+question `0xC3F` (a CPU-capability flag), not `0x1013`; that needs an access-level patch
+or, much more simply, the runtime RAPL path below.
+
+The four PL values are 32-bit fields, so `setup_var` (byte writes) is not enough; use
+RU.EFI or change them at runtime. Runtime is easier, and the MSR lock is off:
+
+```bash
+sudo modprobe msr
+sudo rdmsr -a 0x610                 # PKG_POWER_LIMIT; bit 63 = 0 -> writable
+find /sys/class/powercap -name 'constraint_*_power_limit_uw'
+cat /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw   # PL1, µW
+cat /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_1_power_limit_uw   # PL2, µW
+
+# quiet/fanless profile: 45 W sustained, 65 W burst, 28 s window
+echo 45000000 | sudo tee /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_power_limit_uw
+echo 65000000 | sudo tee /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_1_power_limit_uw
+echo 28000000 | sudo tee /sys/class/powercap/intel-rapl/intel-rapl:0/constraint_0_time_window_us
+```
+
+Those values do not survive a reboot; put them in a systemd unit (or a udev rule) if
+you want them permanent.
+
+Limits that matter more than the menu:
+
+* **The board is a 65 W design.** Advantech's cooler options are 45 W (80 mm) and
+  65 W (92.9 mm), and the datasheet's CPU TDP column tops out at 65 W. The 12–24 V
+  input and 4-pin ATX12V can deliver more, but the VRM and the cooler cannot; PL1
+  above 65 W is outside the board spec.
+* **Non-K SKUs**: Intel's own help text says PL1 must stay between Min Power Limit
+  and TDP, and the BIOS clamps it. The MSR is unlocked, so a runtime tool can set more,
+  but the CPU fuse table may refuse and the VRM will be the real limit. **PL2 is the
+  useful knob** on a locked chip.
+* **4× NVMe lab**: dropping PL1 to 35–45 W is the sane move — 3–4 NVMe add 15–25 W,
+  and you stay inside a 120–180 W brick and the 65 W cooler. Lowering is always safe;
+  raising is the experiment.
+
+#### 4.7.2 Power delivery and battery
+
 * **12 V battery/UPS direct**: the 12–24 V input accepts a 12 V SLA or 4S LiFePO4
   pack without a converter — a natural fit for a DIY NAS/edge box.
 * **ATX PSU**: feed 12 V into ATX12V1 and 5 VSB + PS_ON# into ATX_5VSB1 (never
